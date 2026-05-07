@@ -18,12 +18,14 @@ RUN apt-get update && apt-get install -y \
     ros-humble-rosbag2-py \
     ros-humble-rosbag2-storage \
     ros-humble-rosbag2-storage-mcap \
+    ros-humble-cv-bridge \
+    python3-opencv \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python packages for data processing
 RUN pip3 install --upgrade pip && \
     pip3 install \
-    numpy \
+    'numpy<2' \
     pandas \
     tqdm \
     pyyaml
