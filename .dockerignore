@@ -1,0 +1,33 @@
+# ROS2 Bag files
+2026_03_24_E2E/
+2026_03_24_E2E/**
+*.mcap
+*.bag
+metadata.yaml
+data/
+data/**
+
+# Git
+.git
+.gitignore
+
+# Virtual environments
+venv/
+env/
+.venv
+
+# IDE
+.vscode
+.idea
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.egg-info
+.pytest_cache
