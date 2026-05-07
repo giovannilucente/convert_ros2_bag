@@ -19,6 +19,7 @@ RUN apt-get update && apt-get install -y \
     ros-humble-rosbag2-storage \
     ros-humble-rosbag2-storage-mcap \
     ros-humble-cv-bridge \
+    ros-humble-ouster-sensor-msgs \
     python3-opencv \
     && rm -rf /var/lib/apt/lists/*
 
@@ -28,7 +29,8 @@ RUN pip3 install --upgrade pip && \
     'numpy<2' \
     pandas \
     tqdm \
-    pyyaml
+    pyyaml \
+    ouster-sdk 
 
 # Copy repository contents (bag files are excluded via .dockerignore)
 COPY . /workspace/

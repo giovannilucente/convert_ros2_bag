@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Extract odometry and images from rosbag at 10 Hz (0.1s intervals)."""
+"""Extract odometry, images, and lidar from rosbag at 10 Hz (0.1s intervals)."""
 
 import json
 import cv2
@@ -12,13 +12,17 @@ import rosbag2_py
 from rclpy.serialization import deserialize_message
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import Image
-from std_msgs.msg import Float32
+from std_msgs.msg import Float32, String
 from cv_bridge import CvBridge
+from ouster_sensor_msgs.msg import PacketMsg
 
 
-def extract_multimodal_data(bag_path, output_dir, episode=0, max_files=1):
+def extract_multimodal_data(bag_path, output_dir, episode=0, max_files=1, max_timesteps=None):
     """
     Extract odometry and images grouped by 0.1s time windows.
+    
+    Args:
+        max_timesteps: Maximum number of timesteps to save (None = no limit)
     """
     bag_path = Path(bag_path)
     output_dir = Path(output_dir)
@@ -49,10 +53,39 @@ def extract_multimodal_data(bag_path, output_dir, episode=0, max_files=1):
     
     odom_topic = "/ngc/sensors/gnss/pwrpak7/raw/odom"
     steering_topic = "/ego_vehicle/VEH/steering_angle_measured"
+    
+    # Lidar topics
+    lidar_topics = {
+        "/ngc/sensors/lidar/os0/os_driver/raw/lidar_packets": "os0",
+        "/ngc/sensors/lidar/os1/os_driver/raw/lidar_packets": "os1",
+        "/ngc/sensors/lidar/os2/os_driver/raw/lidar_packets": "os2",
+        "/ngc/sensors/lidar/fr/os0/os_driver/raw/lidar_packets": "os0",
+        "/ngc/sensors/lidar/fl/os2/os_driver/raw/lidar_packets": "os2",
+        "/ngc/sensors/lidar/rl/os1/os_driver/raw/lidar_packets": "os1",
+    }
+    
+    lidar_metadata_topics = {
+        "/ngc/sensors/lidar/os0/os_driver/raw/metadata": "os0",
+        "/ngc/sensors/lidar/os1/os_driver/raw/metadata": "os1",
+        "/ngc/sensors/lidar/os2/os_driver/raw/metadata": "os2",
+        "/ngc/sensors/lidar/fr/os0/os_driver/raw/metadata": "os0",
+        "/ngc/sensors/lidar/fl/os2/os_driver/raw/metadata": "os2",
+        "/ngc/sensors/lidar/rl/os1/os_driver/raw/metadata": "os1",
+    }
+    
     time_window = 100_000_000  # 0.1s in nanoseconds
     
+    # Store metadata globally (same for all timesteps)
+    lidar_metadata_store = {}
+    
     # Group messages by time window
-    time_buckets = defaultdict(lambda: {"odom": None, "images": {}, "steering_angle": None})
+    time_buckets = defaultdict(lambda: {
+        "odom": None, 
+        "images": {}, 
+        "steering_angle": None,
+        "lidar_packets": defaultdict(list),  # {lidar_name: [packets]}
+        "lidar_metadata": {}  # {lidar_name: metadata_json}
+    })
     first_timestamp = None
     
     with tqdm(total=metadata.message_count, desc="Reading") as pbar:
@@ -109,8 +142,17 @@ def extract_multimodal_data(bag_path, output_dir, episode=0, max_files=1):
                 msg = deserialize_message(data, Float32)
                 time_buckets[bucket_index]["steering_angle"] = float(msg.data)
             
-            # Rough estimate: stop after processing enough from first file
-            if bucket_index > 500:
+            elif topic in lidar_metadata_topics:
+                msg = deserialize_message(data, String)
+                lidar_name = lidar_metadata_topics[topic]
+                lidar_metadata_store[lidar_name] = msg.data
+            
+            elif topic in lidar_topics:
+                lidar_name = lidar_topics[topic]
+                time_buckets[bucket_index]["lidar_packets"][lidar_name].append(data)
+            
+            # Stop if max timesteps reached
+            if max_timesteps is not None and bucket_index >= max_timesteps:
                 break
     
     print(f"Writing data for {len(time_buckets)} timesteps...")
@@ -132,6 +174,51 @@ def extract_multimodal_data(bag_path, output_dir, episode=0, max_files=1):
             with open(steering_file, 'w') as f:
                 json.dump({"steering_angle": data["steering_angle"]}, f, indent=2)
         
+        # Write lidar point clouds if available
+        for lidar_name, packets in data["lidar_packets"].items():
+            if packets and lidar_name in lidar_metadata_store:
+                try:
+                    from ouster.sdk import client
+                    
+                    # Parse metadata to get sensor info
+                    metadata_str = lidar_metadata_store[lidar_name]
+                    info = client.SensorInfo(metadata_str)
+                    
+                    # Decode packets to scans
+                    scans = []
+                    for packet_data in packets:
+                        packet_msg = deserialize_message(packet_data, PacketMsg)
+                        # packet_msg.buf contains raw UDP packet data
+                        scans.extend(client.Scans(packet_msg.buf, info))
+                    
+                    if scans:
+                        # Convert scans to point cloud (xyz + intensity)
+                        point_cloud_list = []
+                        for scan in scans:
+                            # Get xyzlut for this scan
+                            xyz = client.XYZLut(info)(scan)
+                            # Get signal (intensity)
+                            signal = scan.signal
+                            
+                            # Stack xyz and intensity (H x W x 4)
+                            h, w = xyz.shape[:2]
+                            intensity = signal.reshape(h, w, 1)
+                            scan_cloud = np.concatenate([xyz, intensity], axis=-1)
+                            
+                            # Reshape to Nx4 and filter valid points
+                            scan_cloud_flat = scan_cloud.reshape(-1, 4)
+                            valid = ~np.isnan(scan_cloud_flat).any(axis=1)
+                            scan_cloud_flat = scan_cloud_flat[valid]
+                            point_cloud_list.append(scan_cloud_flat)
+                        
+                        if point_cloud_list:
+                            point_cloud = np.vstack(point_cloud_list).astype(np.float32)
+                            lidar_file = step_dir / f"lidar_{lidar_name}.npy"
+                            np.save(lidar_file, point_cloud)
+                
+                except Exception as e:
+                    print(f"Warning: Failed to decode lidar {lidar_name}: {e}")
+        
         # Write images if available
         for image_name, cv_image in data["images"].items():
             img_file = step_dir / f"{image_name}.png"
@@ -152,6 +239,9 @@ if __name__ == '__main__':
     if len(sys.argv) > 1:
         output_dir = Path(sys.argv[1])
     
+    max_timesteps = None
+    if len(sys.argv) > 2:
+        max_timesteps = int(sys.argv[2])
     
-    extract_multimodal_data(bag_path, output_dir, episode=0, max_files=1)
+    extract_multimodal_data(bag_path, output_dir, episode=0, max_files=1, max_timesteps=max_timesteps)
     
