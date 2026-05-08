@@ -18,30 +18,51 @@ from cv_bridge import CvBridge
 from ouster_sensor_msgs.msg import PacketMsg
 
 
-def extract_multimodal_data(bag_path, output_dir, episode=0, max_files=1, max_timesteps=None):
+def extract_multimodal_data(bag_path, output_dir, max_files=None, max_timesteps=None):
     """
     Extract odometry and images grouped by 0.1s time windows.
     
     Args:
-        max_timesteps: Maximum number of timesteps to save (None = no limit)
+        bag_path: Path to the rosbag directory
+        output_dir: Output directory for extracted data
+        max_files: Maximum number of MCAP files to process (None = all files)
+        max_timesteps: Maximum number of timesteps to save per file (None = no limit)
     """
     bag_path = Path(bag_path)
     output_dir = Path(output_dir)
     
+    # Find all MCAP files in the bag directory
+    mcap_files = sorted(bag_path.glob("rosbag2_*.mcap"))
+    if not mcap_files:
+        print(f"No MCAP files found in {bag_path}")
+        return
+    
+    if max_files is not None:
+        mcap_files = mcap_files[:max_files]
+    
+    print(f"Found {len(mcap_files)} MCAP file(s)")
+    
+    # Process each file with its own episode number
+    for episode, mcap_file in enumerate(mcap_files):
+        _process_episode(mcap_file, output_dir, episode, max_timesteps)
+
+
+def _process_episode(mcap_file, output_dir, episode, max_timesteps):
+    """Process a single MCAP file as an episode."""
+    
     episode_dir = output_dir / f"episode_{episode}"
     episode_dir.mkdir(parents=True, exist_ok=True)
     
-    print(f"Reading from: {bag_path}")
+    print(f"\n[Episode {episode}] Reading from: {mcap_file}")
     print(f"Output directory: {episode_dir}")
-    print(f"Processing first {max_files} MCAP file(s) ...")
     
-    storage_options = rosbag2_py.StorageOptions(uri=str(bag_path), storage_id="mcap")
+    storage_options = rosbag2_py.StorageOptions(uri=str(mcap_file.parent), storage_id="mcap")
     converter_options = rosbag2_py.ConverterOptions()
     reader = rosbag2_py.SequentialReader()
     reader.open(storage_options, converter_options)
     
     metadata = reader.get_metadata()
-    print(f"Total messages in bag: {metadata.message_count}")
+    print(f"Total messages in file: {metadata.message_count}")
     
     # Image topic to short name mapping
     image_topics = {
@@ -206,13 +227,20 @@ if __name__ == '__main__':
     script_dir = Path(__file__).parent
     bag_path = script_dir / '2026_03_24_E2E'
     output_dir = script_dir / 'data'
+    max_files = None
+    max_timesteps = None
     
     if len(sys.argv) > 1:
-        output_dir = Path(sys.argv[1])
+        bag_path = Path(sys.argv[1])
     
-    max_timesteps = None
     if len(sys.argv) > 2:
-        max_timesteps = int(sys.argv[2])
+        output_dir = Path(sys.argv[2])
     
-    extract_multimodal_data(bag_path, output_dir, episode=0, max_files=1, max_timesteps=max_timesteps)
+    if len(sys.argv) > 3:
+        max_files = int(sys.argv[3])
+    
+    if len(sys.argv) > 4:
+        max_timesteps = int(sys.argv[4])
+    
+    extract_multimodal_data(bag_path, output_dir, max_files=max_files, max_timesteps=max_timesteps)
     

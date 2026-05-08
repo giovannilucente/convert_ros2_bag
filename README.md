@@ -39,26 +39,62 @@ This script:
 If you want to check the ros2 bag topics run:
 ```bash
 # Inside the container
-ros2 bag info ./2026_03_24_E2E
+ros2 bag info /path_to_ros2_bag
 ```
 
-### Extract Odometry Data
+### Extract Data
 
-Extract odometry messages from the rosbag into individual JSON files organized by episode and timestep:
+Extract multimodal sensor data from the rosbag at 10 Hz (0.1s time windows), organized by episode and timestep:
 
 ```bash
 # Inside the container
-python3 extract_odometry.py ./data
+
+# Extract all MCAP files (all data)
+python3 extract_multimodal.py ./2026_03_24_E2E ./data
+
+# Extract only the first file
+python3 extract_multimodal.py ./2026_03_24_E2E ./data 1
+
+# Extract the first file with max 50 timesteps 
+python3 extract_multimodal.py ./2026_03_24_E2E ./data 1 50
 ```
 
-This creates:
+**Arguments:**
+- `bag_path`: Path to the rosbag directory (default: `./2026_03_24_E2E`)
+- `output_dir`: Output directory for extracted data (default: `./data`)
+- `max_files`: Maximum number of MCAP files to process (optional, default: all files)
+- `max_timesteps`: Maximum number of timesteps per file (optional, default: all timesteps)
+
+**Output Structure:**
+
+Each episode (MCAP file) creates a directory with 0.1s timesteps:
 ```
 data/
   episode_0/
     step_000000/
-      odometry.json
+      odometry.json                  # Pose and twist data
+      steering_angle.json            # Steering measurement
+      image_cl.png                   # Front-left camera (demosaicked)
+      image_fl.png                   # Front camera
+      image_cr.png                   # Center-right camera
+      image_rc.png                   # Rear-center camera
+      image_fc.png                   # Front-center camera
+      lidar_os0_metadata.json        # Sensor calibration data
+      lidar_os0_packets.bin          # Raw lidar packets
+      lidar_os1_metadata.json
+      lidar_os1_packets.bin
+      lidar_os2_metadata.json
+      lidar_os2_packets.bin
     step_000001/
-      odometry.json
-    ...
+      ...
+  episode_1/
+    step_000000/
+      ...
 ```
+
+**Data Formats:**
+- Images: PNG (color, demosaicked from Bayer pattern)
+- Odometry: JSON with position (x,y,z) and orientation (quaternion) and velocity
+- Steering: JSON with angle measurement
+- Lidar: Metadata (JSON) + Raw packets (binary, can be decoded with Ouster SDK)
 
