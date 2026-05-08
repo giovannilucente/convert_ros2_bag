@@ -2,6 +2,7 @@
 """Extract odometry, images, and lidar from rosbag at 10 Hz (0.1s intervals)."""
 
 import json
+from logging import info
 import cv2
 import numpy as np
 from pathlib import Path
@@ -56,18 +57,12 @@ def extract_multimodal_data(bag_path, output_dir, episode=0, max_files=1, max_ti
     
     # Lidar topics
     lidar_topics = {
-        "/ngc/sensors/lidar/os0/os_driver/raw/lidar_packets": "os0",
-        "/ngc/sensors/lidar/os1/os_driver/raw/lidar_packets": "os1",
-        "/ngc/sensors/lidar/os2/os_driver/raw/lidar_packets": "os2",
         "/ngc/sensors/lidar/fr/os0/os_driver/raw/lidar_packets": "os0",
         "/ngc/sensors/lidar/fl/os2/os_driver/raw/lidar_packets": "os2",
         "/ngc/sensors/lidar/rl/os1/os_driver/raw/lidar_packets": "os1",
     }
     
     lidar_metadata_topics = {
-        "/ngc/sensors/lidar/os0/os_driver/raw/metadata": "os0",
-        "/ngc/sensors/lidar/os1/os_driver/raw/metadata": "os1",
-        "/ngc/sensors/lidar/os2/os_driver/raw/metadata": "os2",
         "/ngc/sensors/lidar/fr/os0/os_driver/raw/metadata": "os0",
         "/ngc/sensors/lidar/fl/os2/os_driver/raw/metadata": "os2",
         "/ngc/sensors/lidar/rl/os1/os_driver/raw/metadata": "os1",
@@ -134,7 +129,7 @@ def extract_multimodal_data(bag_path, output_dir, episode=0, max_files=1, max_ti
             elif topic in image_topics:
                 msg = deserialize_message(data, Image)
                 bridge = CvBridge()
-                cv_image = bridge.imgmsg_to_cv2(msg, desired_encoding="passthrough")
+                cv_image = bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
                 image_name = image_topics[topic]
                 time_buckets[bucket_index]["images"][image_name] = cv_image
             
@@ -174,50 +169,26 @@ def extract_multimodal_data(bag_path, output_dir, episode=0, max_files=1, max_ti
             with open(steering_file, 'w') as f:
                 json.dump({"steering_angle": data["steering_angle"]}, f, indent=2)
         
-        # Write lidar point clouds if available
+        # Write lidar data if available
         for lidar_name, packets in data["lidar_packets"].items():
             if packets and lidar_name in lidar_metadata_store:
                 try:
-                    from ouster.sdk import client
-                    
-                    # Parse metadata to get sensor info
+                    # Save metadata as JSON
                     metadata_str = lidar_metadata_store[lidar_name]
-                    info = client.SensorInfo(metadata_str)
+                    metadata_file = step_dir / f"lidar_{lidar_name}_metadata.json"
+                    with open(metadata_file, 'w') as f:
+                        f.write(metadata_str)
                     
-                    # Decode packets to scans
-                    scans = []
-                    for packet_data in packets:
-                        packet_msg = deserialize_message(packet_data, PacketMsg)
-                        # packet_msg.buf contains raw UDP packet data
-                        scans.extend(client.Scans(packet_msg.buf, info))
+                    # Save raw packets as binary file 
+                    packets_file = step_dir / f"lidar_{lidar_name}_packets.bin"
+                    with open(packets_file, 'wb') as f:
+                        for packet_data in packets:
+                            packet_msg = deserialize_message(packet_data, PacketMsg)
+                            f.write(bytes(packet_msg.buf))
                     
-                    if scans:
-                        # Convert scans to point cloud (xyz + intensity)
-                        point_cloud_list = []
-                        for scan in scans:
-                            # Get xyzlut for this scan
-                            xyz = client.XYZLut(info)(scan)
-                            # Get signal (intensity)
-                            signal = scan.signal
-                            
-                            # Stack xyz and intensity (H x W x 4)
-                            h, w = xyz.shape[:2]
-                            intensity = signal.reshape(h, w, 1)
-                            scan_cloud = np.concatenate([xyz, intensity], axis=-1)
-                            
-                            # Reshape to Nx4 and filter valid points
-                            scan_cloud_flat = scan_cloud.reshape(-1, 4)
-                            valid = ~np.isnan(scan_cloud_flat).any(axis=1)
-                            scan_cloud_flat = scan_cloud_flat[valid]
-                            point_cloud_list.append(scan_cloud_flat)
-                        
-                        if point_cloud_list:
-                            point_cloud = np.vstack(point_cloud_list).astype(np.float32)
-                            lidar_file = step_dir / f"lidar_{lidar_name}.npy"
-                            np.save(lidar_file, point_cloud)
-                
                 except Exception as e:
-                    print(f"Warning: Failed to decode lidar {lidar_name}: {e}")
+                    print(f"Warning: Failed to save lidar {lidar_name}: {e}")
+                
         
         # Write images if available
         for image_name, cv_image in data["images"].items():
