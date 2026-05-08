@@ -24,7 +24,7 @@ If your rosbag was recorded with ROS2 Jazzy, convert the metadata to Humble form
 
 ```bash
 # Inside the container
-python3 convert_jazzy_to_humble.py
+python3 convert_jazzy_to_humble.py /path_to_ros2_bag
 ```
 
 This script:
@@ -34,6 +34,13 @@ This script:
 
 **Note:** The original metadata is safely backed up before overwriting.
 
+### Check the ros2 bag topics
+
+If you want to check the ros2 bag topics run:
+```bash
+# Inside the container
+ros2 bag info ./2026_03_24_E2E
+```
 
 ### Extract Odometry Data
 
